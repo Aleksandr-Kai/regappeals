@@ -1,83 +1,35 @@
 package apiserver
 
 import (
-	"context"
-	"github.com/gorilla/mux"
-	"github.com/sirupsen/logrus"
-	"io"
+	"database/sql"
+	"github.com/gorilla/sessions"
 	"net/http"
-	"regappeals/internal/app/store"
+	"regappeals/internal/app/store/sqlstore"
 )
 
-type APIServer struct {
-	config    *Config
-	logger    *logrus.Logger
-	router    *mux.Router
-	store     *store.Store
-	webServer *http.Server
-}
-
-func New(config *Config) *APIServer {
-	return &APIServer{
-		config: config,
-		logger: logrus.New(),
-		router: mux.NewRouter(),
-	}
-}
-
-func (s *APIServer) Start() error {
-	if err := s.configureLogger(); err != nil {
-		return err
-	}
-	s.configureRouter()
-
-	if err := s.configureStore(); err != nil {
-		return err
-	}
-
-	s.logger.Info("starting api server")
-
-	s.webServer = &http.Server{
-		Addr:    s.config.BindAddr,
-		Handler: s.router,
-	}
-
-	return s.webServer.ListenAndServe()
-}
-
-func (s *APIServer) configureLogger() error {
-	level, err := logrus.ParseLevel(s.config.LogLevel)
+func Start(config *Config) error {
+	db, err := newDB(config.DatabaseURL)
 	if err != nil {
 		return err
 	}
-	s.logger.SetLevel(level)
-	return nil
+	defer db.Close()
+
+	store := sqlstore.New(db)
+	sessionStore := sessions.NewCookieStore([]byte(config.SessionKey))
+	srv := newServer(store, sessionStore)
+
+	return http.ListenAndServe(config.BindAddr, srv)
 }
 
-func (s *APIServer) configureRouter() {
-	s.router.HandleFunc("/hello", s.handleHello())
-	s.router.HandleFunc("/stop", s.handleStop())
-}
-
-func (s *APIServer) handleHello() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, "Hello")
-	}
-}
-
-func (s *APIServer) handleStop() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		s.webServer.Shutdown(context.Background())
-	}
-}
-
-func (s *APIServer) configureStore() error {
-	st := store.New(s.config.Store)
-	if err := st.Open(); err != nil {
-		return err
+func newDB(databaseURL string) (*sql.DB, error) {
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		return nil, err
 	}
 
-	s.store = st
+	if err = db.Ping(); err != nil {
+		return nil, err
+	}
 
-	return nil
+	return db, nil
 }
